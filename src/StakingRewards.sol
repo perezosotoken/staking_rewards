@@ -6,7 +6,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-import "./interfaces/IStakingRewards.sol";
 import "./RewardsDistributionRecipient.sol";
 
 contract StakingRewards is RewardsDistributionRecipient, ReentrancyGuard, Pausable {
