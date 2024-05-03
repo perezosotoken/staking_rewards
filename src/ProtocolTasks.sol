@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/KeeperCompatibleInterface.sol";
+import "foundry-chainlink-toolkit/src/interfaces/automation/KeeperCompatibleInterface.sol";
 
 interface ICakePool {
      function notifyRewardAmount(uint256 reward) external ;
@@ -12,8 +12,8 @@ interface ICakePool {
 contract ProtocolTasks is KeeperCompatibleInterface {
     using SafeERC20 for IERC20;
 
-    address public constant perezosoToken = 0x53ff62409b219ccaff01042bb2743211bb99882e 
-    uint public interval = 604800; // 1 week
+    address public constant perezosoToken = 0x53Ff62409B219CcAfF01042Bb2743211bB99882e;
+    uint256 public interval = 604800; // 1 week
    
     address public perezoso_staking_contract = address(0);
 
