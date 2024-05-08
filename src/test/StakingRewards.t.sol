@@ -6,34 +6,55 @@ import "../StakingRewards.sol";
 import "../RewardsDistributionRecipient.sol";
 
 import "./ERC20Mock.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract StakingRewardsTest is Test {
     StakingRewards public stakingRewards;
     address public owner;
     address public alice;
     address public bob;
-    ERC20Mock public rewardsToken;
-    ERC20Mock public stakingToken;
+    IERC20 public rewardsToken;
+    IERC20 public stakingToken;
+
+    uint256 privateKey = vm.envUint("PRIVATE_KEY");
+    address deployer = vm.envAddress("DEPLOYER");
+    address mm = vm.envAddress("MM");
+    uint256 pKey = vm.envUint("PKEY");
 
     function setUp() public {
-        owner = address(this);
+        owner = address(this);  // Typically the deploying address in tests
         alice = address(0x123);
         bob = address(0x456);
 
-        rewardsToken = new ERC20Mock("Rewards Token", "RT", 1e18 * 1500000);
-        stakingToken = new ERC20Mock("Staking Token", "ST", 1e18 * 1500000);
+        // Assuming rewardsToken and stakingToken are already deployed and available at these addresses
+        rewardsToken = IERC20(0x53Ff62409B219CcAfF01042Bb2743211bB99882e);
+        stakingToken = IERC20(0x53Ff62409B219CcAfF01042Bb2743211bB99882e);
 
-        stakingRewards = new StakingRewards(owner, address(rewardsToken), address(stakingToken));
-        stakingRewards.setRewardsDistribution(owner); 
- 
-        stakingRewards.transferOwnership(alice); // Set Alice as the owner for rewards distribution
+        // Deploy the StakingRewards contract
+        stakingRewards = new StakingRewards(owner, address(rewardsToken));
 
-        // Distribute tokens and approvals
-        stakingToken.transfer(alice, 1e18 * 1000);
-        stakingToken.transfer(bob, 1e18 * 1000);
-        rewardsToken.transfer(address(stakingRewards), 1e18 * 500000);
-        stakingToken.approve(address(stakingRewards), type(uint256).max);
+        // Transfer ownership to a specific user if needed
+        stakingRewards.transferOwnership(alice);
 
+        // Set up initial token distribution and approvals
+        if (vm.envAddress("DEPLOYER") != address(0)) {
+            address deployer = vm.envAddress("MM");
+            uint256 deployerBalance = stakingToken.balanceOf(deployer);
+            console.log("Deployer balance: ", deployerBalance);
+
+            // Simulate transfers from the deployer or token holder to users and the contract
+            vm.startBroadcast(pKey);
+            stakingToken.transfer(alice, 1e18 * 1000);
+            stakingToken.transfer(bob, 1e18 * 1000);
+            rewardsToken.transfer(address(stakingRewards),1e18 * 5_000_000_000);
+            stakingToken.approve(address(stakingRewards), type(uint256).max);
+            rewardsToken.approve(address(stakingRewards), type(uint256).max);
+            vm.stopBroadcast();  // Stop the impersonation of the deployer
+
+            // Ensure that the contract and users have approved the staking contract to handle their tokens
+        }
+
+        // Mocking user actions with token approvals
         vm.prank(alice);
         stakingToken.approve(address(stakingRewards), type(uint256).max);
         vm.stopPrank();
@@ -44,14 +65,10 @@ contract StakingRewardsTest is Test {
     }
 
     function testNotifyRewardAmountByOwner() public {
-        uint256 reward = 1e18 * 1000;
-        uint256 duration = 30 days;
+        uint256 reward = 1e18 * 1_000_000_000;
+        uint256 duration = 365 days;
 
-        vm.prank(alice);
-        stakingRewards.setRewardsDuration(duration);
-        vm.stopPrank();
-
-        vm.prank(owner);
+        vm.prank(mm);
         stakingRewards.notifyRewardAmount(reward);
         vm.stopPrank();
 
@@ -61,8 +78,7 @@ contract StakingRewardsTest is Test {
 
     function testFailNotifyRewardAmountByNonOwner() public {
         uint256 reward = 1e18 * 1000;
-        uint256 duration = 30 days;
-        stakingRewards.setRewardsDuration(duration);
+        uint256 duration = 365 days;
         vm.prank(bob);
         vm.expectRevert("Ownable: caller is not the owner");
         stakingRewards.notifyRewardAmount(reward);
@@ -75,11 +91,10 @@ contract StakingRewardsTest is Test {
         stakingRewards.stake(amount, lockPeriod);
         assertEq(stakingRewards.balanceOf(alice), amount, "Alice's staked balance should be 100 tokens");
         // Retrieve the entire struct as a tuple for the first stake
-        (uint256 stakedAmount,,) = stakingRewards.stakes(alice, 0);
+        (uint256 stakedAmount,,,) = stakingRewards.stakes(alice, 0);
         assertEq(stakedAmount, amount, "Stake amount should be correct");
 
     }
-
 
     function testMultipleStakes() public {
         uint256 amount = 1e18 * 100;
@@ -91,30 +106,14 @@ contract StakingRewardsTest is Test {
         vm.stopPrank();
 
         // Retrieve the entire struct as a tuple for the first stake
-        (uint256 stakedAmount1, uint256 stakedLockPeriod1, uint256 stakedLockEnd1) = stakingRewards.stakes(alice, 0);
+        (uint256 stakedAmount1, uint256 stakedLockPeriod1,, uint256 stakedLockEnd1) = stakingRewards.stakes(alice, 0);
         assertEq(stakedAmount1, amount, "First stake amount should be correct");
 
         // Retrieve the entire struct as a tuple for the second stake
-        (uint256 stakedAmount2, uint256 stakedLockPeriod2, uint256 stakedLockEnd2) = stakingRewards.stakes(alice, 1);
+        (uint256 stakedAmount2, uint256 stakedLockPeriod2,, uint256 stakedLockEnd2) = stakingRewards.stakes(alice, 1);
         assertEq(stakedAmount2, amount * 2, "Second stake amount should be correct");
     }
 
-
-    // function testWithdraw() public {
-    //     testStakeWithValidPeriod();
-    //     uint256 amount = 1e18 * 100;
-    //     uint256 aliceInitialBalance = 1000e18;
-    //     vm.warp(block.timestamp + 31 days); // Move time to after both lock periods
-    //     vm.startPrank(alice);
-    //     stakingRewards.withdraw(0); // Withdraw the first stake
-    //     assertEq(stakingToken.balanceOf(alice) , amount, "Alice should have received her staked tokens back");
-    //     // stakingRewards.withdraw(0); // Withdraw the second stake (now at index 0)
-    //     // assertEq(stakingToken.balanceOf(alice), amount * 2, "Alice should have received all her staked tokens back");
-        
-
-    //     vm.stopPrank();
- 
-    // }
    function testWithdraw() public {
         // First, Alice stakes some tokens
         uint256 amount = 1e18 * 100;
@@ -160,21 +159,18 @@ contract StakingRewardsTest is Test {
 
         // Check if Alice's balance is updated correctly
         uint256 aliceBalanceAfterFirstWithdrawal = stakingToken.balanceOf(alice);
-        console.log(stakingToken.balanceOf(alice));
         assertEq(aliceBalanceAfterFirstWithdrawal, aliceBalanceAfterFirstStake + amount1, "Alice should have withdrawn her first stake");
         
         vm.prank(alice);
         stakingRewards.stake(amount2, 90 days);
 
-
-        (uint256 stakedAmount, uint256 stakedLockPeriod, uint256 stakedLockEnd) = stakingRewards.stakes(alice, 0);
+        (uint256 stakedAmount, uint256 stakedLockPeriod,, uint256 stakedLockEnd) = stakingRewards.stakes(alice, 0);
         assertEq(stakedAmount, amount2, "Stake amount should be correct");
 
         // Alice tries to withdraw the second stake before its period ends
         vm.prank(alice);
         vm.expectRevert("Stake is locked");
         stakingRewards.withdraw(0);
-
 
         // Move time forward and withdraw the second stake
         vm.warp(block.timestamp + 90 days); // Total 61 days, beyond the second tier's lock
@@ -186,7 +182,55 @@ contract StakingRewardsTest is Test {
         assertEq(aliceFinalBalance, 1e18 * 1000, "Alice should have received all her staked tokens back");
     }
 
-    function testGetReward() public {
+    function testWithdrawTier1ShouldFailLocked() public {
+        uint256 amount = 1e18 * 100;
+        vm.prank(alice);
+        stakingRewards.stake(amount, 30 days);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 20 days); // Move time to before the lock period ends
+        vm.prank(alice);
+        vm.expectRevert("Stake is locked");
+        stakingRewards.withdraw(0);
+    }
+
+    function testWithdrawTier2ShouldFailLocked() public {
+        uint256 amount = 1e18 * 100;
+        vm.prank(alice);
+        stakingRewards.stake(amount, 90 days);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 80 days); // Move time to before the lock period ends
+        vm.prank(alice);
+        vm.expectRevert("Stake is locked");
+        stakingRewards.withdraw(0);
+    }
+
+    function testWithdrawTier3ShouldFailLocked() public {
+        uint256 amount = 1e18 * 100;
+        vm.prank(alice);
+        stakingRewards.stake(amount, 180 days);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 170 days); // Move time to before the lock period ends
+        vm.prank(alice);
+        vm.expectRevert("Stake is locked");
+        stakingRewards.withdraw(0);
+    }
+
+    function testWithdrawTier4ShouldFailLocked() public {
+        uint256 amount = 1e18 * 100;
+        vm.prank(alice);
+        stakingRewards.stake(amount, 30 days * 12);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 359 days); // Move time to before the lock period ends
+        vm.prank(alice);
+        vm.expectRevert("Stake is locked");
+        stakingRewards.withdraw(0);
+    }
+
+    function testGetRewardTier1() public {
         testNotifyRewardAmountByOwner();
         testStakeWithValidPeriod();
         uint256 initialBalance = rewardsToken.balanceOf(alice);
@@ -196,4 +240,58 @@ contract StakingRewardsTest is Test {
         assertGt(rewardsToken.balanceOf(alice), initialBalance, "Alice should have received some rewards");
         console.log(rewardsToken.balanceOf(alice));
     }
+
+    function stakeWithValidPeriod(uint256 amount, uint256 lockPeriod) public {
+        vm.prank(alice);
+        stakingRewards.stake(amount, lockPeriod);
+        assertEq(stakingRewards.balanceOf(alice), amount, "Alice's staked balance should be 100 tokens");
+        // Retrieve the entire struct as a tuple for the first stake
+        (uint256 stakedAmount,,,) = stakingRewards.stakes(alice, 0);
+        assertEq(stakedAmount, amount, "Stake amount should be correct");
+
+    }
+
+    function testGetRewardTier2() public {
+        testNotifyRewardAmountByOwner();
+        stakeWithValidPeriod(1e18 * 100, 90 days);
+        uint256 initialBalance = rewardsToken.balanceOf(alice);
+        vm.warp(block.timestamp + 91 days); // Move time to after the lock period
+        vm.prank(alice);
+        stakingRewards.getReward(); // Alice claims her rewards
+        assertGt(rewardsToken.balanceOf(alice), initialBalance, "Alice should have received some rewards");
+        console.log(rewardsToken.balanceOf(alice));
+    }
+
+    function testGetRewardTier3() public {
+        testNotifyRewardAmountByOwner();
+        stakeWithValidPeriod(1e18 * 100, 180 days);
+        uint256 initialBalance = rewardsToken.balanceOf(alice);
+        vm.warp(block.timestamp + 181 days); // Move time to after the lock period
+        vm.prank(alice);
+        stakingRewards.getReward(); // Alice claims her rewards
+        assertGt(rewardsToken.balanceOf(alice), initialBalance, "Alice should have received some rewards");
+        console.log(rewardsToken.balanceOf(alice));
+    }
+
+    function testGetRewardTier4() public {
+        testNotifyRewardAmountByOwner();
+        stakeWithValidPeriod(1e18 * 100, 30 days * 12);
+        uint256 initialBalance = rewardsToken.balanceOf(alice);
+        vm.warp(block.timestamp + 365 days); // Move time to after the lock period
+        vm.prank(alice);
+        stakingRewards.getReward(); // Alice claims her rewards
+        assertGt(rewardsToken.balanceOf(alice), initialBalance, "Alice should have received some rewards");
+        console.log(rewardsToken.balanceOf(alice));
+    }
+
+    // function testExit() public {
+    //     testNotifyRewardAmountByOwner();
+    //     stakeWithValidPeriod(1e18 * 100, 30 days);
+    //     uint256 initialBalance = rewardsToken.balanceOf(alice);
+    //     vm.warp(block.timestamp + 31 days); // Move time to after the lock period
+    //     vm.prank(alice);
+    //     stakingRewards.exit(0); // Alice claims her rewards
+    //     assertGt(rewardsToken.balanceOf(alice), initialBalance, "Alice should have received some rewards");
+    // }
+
 }
