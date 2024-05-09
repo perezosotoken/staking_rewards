@@ -60,7 +60,8 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     using SafeMath for uint256;
 
     IERC20 public perezoso;
-    uint256 public constant DURATION = 365 days;
+    uint256 public  DURATION = 7 days;
+    uint256 private MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
 
     uint256 public periodFinish = 0;
     uint256 public rewardRate = 0;
@@ -75,7 +76,9 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     mapping(uint256 => uint256) public lockMultipliers;
 
     uint256 private _totalSupply;
+    
     mapping(address => uint256) private _balances;
+
     address public deployer;
 
     struct Stake {
@@ -192,9 +195,16 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     function getReward() public updateReward(msg.sender) {
         uint256 reward = earned(msg.sender);
         if (reward > 0) {
-            rewards[msg.sender] = 0;
-            perezoso.safeTransfer(msg.sender, reward);
-            emit RewardPaid(msg.sender, reward);
+            uint256 withdrawalAmount = reward;
+
+            if (reward > MAX_WITHDRAWAL_AMOUNT) {
+                withdrawalAmount = MAX_WITHDRAWAL_AMOUNT;
+            }
+
+            rewards[msg.sender] -= withdrawalAmount;
+            perezoso.safeTransfer(msg.sender, withdrawalAmount);
+
+            emit RewardPaid(msg.sender, withdrawalAmount);
         }
     }
 
@@ -223,6 +233,16 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external onlyOwnerOrDeployer {
         IERC20(tokenAddress).safeTransfer(owner(), tokenAmount);
         emit TokensRecovered(tokenAddress, tokenAmount);
+    }
+
+    function setMaxWithdrawalAmount(uint256 amount) external onlyOwnerOrDeployer {
+        MAX_WITHDRAWAL_AMOUNT = amount;
+    }
+
+    function setDuration(uint256 _duration) external onlyOwnerOrDeployer {
+        require(periodFinish == 0, "Cannot change duration after rewards distribution has started");
+        require(_duration > 0, "Duration must be greater than 0");
+        DURATION = _duration;
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
