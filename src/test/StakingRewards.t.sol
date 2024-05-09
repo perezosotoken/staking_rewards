@@ -376,8 +376,9 @@ contract StakingRewardsTest is Test {
 
     function testWithdrawalLimit() public {
         // Setup
-        uint256 MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
+        testNotifyRewardAmountByOwner();
 
+        uint256 MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
         uint256 balance = stakingToken.balanceOf(address(this));
 
         assertEq(MAX_WITHDRAWAL_AMOUNT, balance, "Contract balance should match the max withdrawal amount");
@@ -386,15 +387,41 @@ contract StakingRewardsTest is Test {
 
         vm.prank(alice);
         stakingRewards.stake(amount, 30 days);
-        vm.warp(block.timestamp + 30 days + 1); // Fast forward time to ensure withdrawal is valid
+        vm.warp(block.timestamp + 3 days + 1); // Fast forward time to ensure withdrawal is valid
+        
+        uint256 aliceBalanceBefore = rewardsToken.balanceOf(alice);
 
         vm.prank(alice);
         stakingRewards.getReward();  // Attempt to withdraw which should respect the max limit
 
         // Validation
-        uint256 aliceBalance = rewardsToken.balanceOf(alice);
+        uint256 aliceBalanceAfter = rewardsToken.balanceOf(alice);
         
-        assertLe(aliceBalance, MAX_WITHDRAWAL_AMOUNT, "Withdrawal should not exceed max limit");
+        uint256 balancesDelta = aliceBalanceAfter - aliceBalanceBefore;
+        assertTrue(balancesDelta <= MAX_WITHDRAWAL_AMOUNT, "Alice should have received the max withdrawal amount");
+    }
+        
+    function testWithdrawalOncePerDay() public {
+        testNotifyRewardAmountByOwner();
+
+        uint256 amount = 1_000_000 * 1e18;
+
+        vm.startPrank(alice);
+        stakingRewards.stake(amount, 180 days);
+        vm.warp(block.timestamp + 60 days); // Fast forward time to ensure withdrawal is valid
+
+        stakingRewards.getReward(); // First withdrawal, should succeed.
+
+        uint256 lastTime = stakingRewards.lastWithdrawalTime(alice);
+        console.log("Last Withdrawal Time:", lastTime);
+
+        vm.warp(block.timestamp + 12 hours); 
+        console.log(block.timestamp + 12 hours);
+
+        vm.expectRevert("Withdrawal can only be done once a day");
+        stakingRewards.getReward(); // Second attempt should fail but does not
+
+        vm.stopPrank();
     }
 
     function testSetMaxWithdrawalAmount() public {

@@ -78,6 +78,7 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     uint256 private _totalSupply;
     
     mapping(address => uint256) private _balances;
+    mapping(address => uint256) public lastWithdrawalTime;
 
     address public deployer;
 
@@ -145,6 +146,7 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
         for (uint256 i = 0; i < stakes[account].length; i++) {
             totalEarned += earnedOnStake(account, i);
         }
+
         return totalEarned + rewards[account];
     }
 
@@ -174,6 +176,8 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
 
         _totalSupply += amount;
         _balances[msg.sender] += amount;
+        lastWithdrawalTime[msg.sender] = 0;
+
         super.stake(amount);
         emit Staked(msg.sender, amount, lockPeriod);
     }
@@ -196,18 +200,25 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
 
     function getReward() public updateReward(msg.sender) {
         uint256 reward = earned(msg.sender);
-        if (reward > 0) {
-            uint256 withdrawalAmount = reward;
+        require(reward > 0, "No rewards to claim");
 
-            if (reward > MAX_WITHDRAWAL_AMOUNT) {
-                withdrawalAmount = MAX_WITHDRAWAL_AMOUNT;
-            }
+        // Ensure withdrawals are only done once per day
+        uint256 currentTime = block.timestamp;
+        uint256 lastAllowedWithdrawalTime = lastWithdrawalTime[msg.sender] + 1 days;
+        require(
+            lastWithdrawalTime[msg.sender] == 0 || currentTime > lastAllowedWithdrawalTime,
+            "Withdrawal can only be done once a day"
+        );
 
-            rewards[msg.sender] -= withdrawalAmount;
-            perezoso.safeTransfer(msg.sender, withdrawalAmount);
-
-            emit RewardPaid(msg.sender, withdrawalAmount);
+        uint256 withdrawalAmount = reward;
+        if (reward > MAX_WITHDRAWAL_AMOUNT) {
+            withdrawalAmount = MAX_WITHDRAWAL_AMOUNT;
         }
+
+        rewards[msg.sender] -= withdrawalAmount; // Ensure the reward reduction is before the transfer
+        lastWithdrawalTime[msg.sender] = currentTime; // Update the last withdrawal time to the current time
+        perezoso.safeTransfer(msg.sender, withdrawalAmount);
+        emit RewardPaid(msg.sender, withdrawalAmount);
     }
 
     function notifyRewardAmount(uint256 _amount)
@@ -224,6 +235,7 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
             require(newRewardRate >= rewardRate, "New reward rate too low");
             rewardRate = newRewardRate;
         }
+
         lastUpdateTime = block.timestamp;
         periodFinish = block.timestamp.add(DURATION);
 
