@@ -5,11 +5,59 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+
 import "./RewardsDistributionRecipient.sol";
 import "./TokenWrapper.sol";
 
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
+library SafeMath {
+
+  /**
+  * @dev Multiplies two numbers, throws on overflow.
+  */
+  function mul(uint256 a, uint256 b) internal pure returns (uint256 c) {
+    if (a == 0) {
+      return 0;
+    }
+    c = a * b;
+    assert(c / a == b);
+    return c;
+  }
+
+  /**
+  * @dev Integer division of two numbers, truncating the quotient.
+  */
+  function div(uint256 a, uint256 b) internal pure returns (uint256) {
+    // assert(b > 0); // Solidity automatically throws when dividing by 0
+    // uint256 c = a / b;
+    // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+    return a / b;
+  }
+
+  /**
+  * @dev Subtracts two numbers, throws on overflow (i.e. if subtrahend is greater than minuend).
+  */
+  function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+    assert(b <= a);
+    return a - b;
+  }
+
+  /**
+  * @dev Adds two numbers, throws on overflow.
+  */
+  function add(uint256 a, uint256 b) internal pure returns (uint256 c) {
+    c = a + b;
+    assert(c >= a);
+    return c;
+  }
+}
+
 contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using SafeMath for uint256;
 
     IERC20 public perezoso;
     uint256 public constant DURATION = 365 days;
@@ -18,6 +66,7 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     uint256 public rewardRate = 0;
     uint256 public lastUpdateTime;
     uint256 public rewardPerTokenStored;
+
     mapping(address => uint256) public userRewardPerTokenPaid;
     mapping(address => uint256) public rewards;
 
@@ -27,6 +76,7 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
 
     uint256 private _totalSupply;
     mapping(address => uint256) private _balances;
+    address public deployer;
 
     struct Stake {
         uint256 amount;
@@ -39,10 +89,13 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     event Staked(address indexed user, uint256 amount, uint256 lockPeriod);
     event Withdrawn(address indexed user, uint256 amount);
     event RewardPaid(address indexed user, uint256 reward);
+    event TokensRecovered(address token, uint256 amount);
 
     constructor(address _owner, address _perezoso) Ownable(_owner) {
+        
         perezoso = IERC20(_perezoso);
         transferOwnership(_owner);
+        deployer = msg.sender;
 
         // Initialize lock periods and multipliers
         lockPeriods[30 days] = 1;
@@ -72,10 +125,14 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
         if (totalSupply() == 0) {
             return rewardPerTokenStored;
         }
-        uint256 timeDelta = lastTimeRewardApplicable() - lastUpdateTime;
-        uint256 rewardAmount = timeDelta * rewardRate;
-        uint256 rewardPerTokenIncrement = rewardAmount * 1e18 / totalSupply();
-        return rewardPerTokenStored + rewardPerTokenIncrement;
+        return
+            rewardPerTokenStored.add(
+                lastTimeRewardApplicable()
+                    .sub(lastUpdateTime)
+                    .mul(rewardRate)
+                    .mul(1e18)
+                    .div(totalSupply())
+            );
     }
 
     function earned(address account) public view returns (uint256) {
@@ -147,19 +204,25 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
         updateReward(address(0))
     {
         if (block.timestamp >= periodFinish) {
-            rewardRate = _amount / DURATION;
+            rewardRate = _amount.div(DURATION);
         } else {
-            uint256 remainingTime = periodFinish - block.timestamp;
-            uint256 leftoverReward = remainingTime * rewardRate;
-            uint256 newRewardRate = _amount + leftoverReward / DURATION;
+            uint256 remainingTime = periodFinish.sub(block.timestamp);
+            uint256 leftoverReward = remainingTime.mul(rewardRate);
+            uint256 newRewardRate = _amount.add(leftoverReward).div(DURATION);
             require(newRewardRate >= rewardRate, "New reward rate too low");
             rewardRate = newRewardRate;
         }
         lastUpdateTime = block.timestamp;
-        periodFinish = block.timestamp + DURATION;
+        periodFinish = block.timestamp.add(DURATION);
 
         perezoso.safeTransferFrom(msg.sender, address(this), _amount);
+
         emit RewardAdded(_amount);
+    }
+
+    function recoverERC20(address tokenAddress, uint256 tokenAmount) external onlyOwnerOrDeployer {
+        IERC20(tokenAddress).safeTransfer(owner(), tokenAmount);
+        emit TokensRecovered(tokenAddress, tokenAmount);
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
@@ -177,4 +240,10 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
         }
         _;
     }
+
+    modifier onlyOwnerOrDeployer() {
+        require(msg.sender == owner() || msg.sender == deployer, "Caller is not the owner or deployer");
+        _;
+    }
+
 }
