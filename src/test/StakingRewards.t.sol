@@ -350,6 +350,34 @@ contract StakingRewardsTest is Test {
         assertEq(ownerBalanceBefore + amountToSend, ownerBalanceAfter, "Owner should have 500 tokens more after recovery");
     }
 
+    function testRecoverPerezosoToken() public {
+        // First, ensure that only the owner or deployer can recover tokens
+        // Simulate sending some ERC20 tokens to the staking contract
+        uint256 amountToSend = 1e18 * 5000;  
+        vm.prank(alice);
+        rewardsToken.transfer(address(stakingRewards), amountToSend);
+        vm.stopPrank();
+
+        // Check balance before recovery
+        uint256 contractBalanceBefore = rewardsToken.balanceOf(address(stakingRewards));
+        uint256 ownerBalanceBefore = rewardsToken.balanceOf(owner);
+
+        // Attempt to recover tokens - this should be done by the owner
+        vm.prank(address(this));
+        stakingRewards.recoverPerezosoToken();
+
+        // Verify that the tokens were successfully recovered
+        uint256 contractBalanceAfter = rewardsToken.balanceOf(address(stakingRewards));
+        uint256 ownerBalanceAfter = rewardsToken.balanceOf(owner);
+
+        address owner = stakingRewards.owner();
+
+        assertEq(owner, address(this), "Owner should be the test contract");
+        
+        assertTrue(contractBalanceBefore > contractBalanceAfter, "Contract should have less tokens after recovery");
+        assertTrue(ownerBalanceBefore < ownerBalanceAfter, "Owner should have more tokens after recovery");
+    }
+
     function testWithdrawalLimit() public {
         // Setup
         uint256 MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
@@ -402,15 +430,5 @@ contract StakingRewardsTest is Test {
         vm.expectRevert("Cannot change duration after rewards distribution has started");
         stakingRewards.setDuration(10 days);
     }
-
-    // function testExit() public {
-    //     testNotifyRewardAmountByOwner();
-    //     stakeWithValidPeriod(1e18 * 100, 30 days);
-    //     uint256 initialBalance = rewardsToken.balanceOf(alice);
-    //     vm.warp(block.timestamp + 31 days); // Move time to after the lock period
-    //     vm.prank(alice);
-    //     stakingRewards.exit(0); // Alice claims her rewards
-    //     assertGt(rewardsToken.balanceOf(alice), initialBalance, "Alice should have received some rewards");
-    // }
 
 }

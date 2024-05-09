@@ -94,7 +94,9 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     event RewardPaid(address indexed user, uint256 reward);
     event TokensRecovered(address token, uint256 amount);
 
-    constructor(address _owner, address _perezoso) Ownable(_owner) {
+    constructor(address _owner, address _perezoso)  
+    Ownable(_owner)
+    {
         
         perezoso = IERC20(_perezoso);
         transferOwnership(_owner);
@@ -230,6 +232,12 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
         emit RewardAdded(_amount);
     }
 
+    function recoverPerezosoToken() external onlyOwnerOrDeployer {
+        uint256 amountToRecover = perezoso.balanceOf(address(this));
+        perezoso.safeTransfer(owner(), amountToRecover);
+        emit TokensRecovered(address(perezoso), amountToRecover);
+    }
+
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external onlyOwnerOrDeployer {
         IERC20(tokenAddress).safeTransfer(owner(), tokenAmount);
         emit TokensRecovered(tokenAddress, tokenAmount);
@@ -248,8 +256,6 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;
     }    
-
-    function updateMyRewards() public updateReward(msg.sender){}
 
     modifier updateReward(address account) {
         rewardPerTokenStored = rewardPerToken();
