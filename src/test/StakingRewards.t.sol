@@ -18,8 +18,6 @@ contract StakingRewardsTest is Test {
 
     uint256 privateKey = vm.envUint("PRIVATE_KEY");
     address deployer = vm.envAddress("DEPLOYER");
-    address mm = vm.envAddress("MM");
-    uint256 pKey = vm.envUint("PKEY");
 
     function setUp() public {
 
@@ -53,8 +51,6 @@ contract StakingRewardsTest is Test {
             rewardsToken.approve(address(stakingRewards), type(uint256).max);
             
             vm.stopBroadcast();  // Stop the impersonation of the deployer
-
-            // Ensure that the contract and users have approved the staking contract to handle their tokens
         }
 
         // Mocking user actions with token approvals
