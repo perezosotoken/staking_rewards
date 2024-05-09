@@ -59,9 +59,9 @@ contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, Reentranc
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
-    IERC20 public perezoso;
+    IERC20  public  perezoso;
     uint256 public  DURATION = 7 days;
-    uint256 private MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
+    uint256 public  MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
 
     uint256 public periodFinish = 0;
     uint256 public rewardRate = 0;
