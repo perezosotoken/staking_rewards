@@ -22,13 +22,14 @@ contract StakingRewardsTest is Test {
     uint256 pKey = vm.envUint("PKEY");
 
     function setUp() public {
+
         owner = address(this);  // Typically the deploying address in tests
         alice = address(0x123);
         bob = address(0x456);
 
         // Assuming rewardsToken and stakingToken are already deployed and available at these addresses
-        rewardsToken = IERC20(0x53Ff62409B219CcAfF01042Bb2743211bB99882e);
-        stakingToken = IERC20(0x53Ff62409B219CcAfF01042Bb2743211bB99882e);
+        rewardsToken = IERC20(0xD83207C127c910e597b8ce77112ED0a56c8C9CD0);
+        stakingToken = IERC20(0xD83207C127c910e597b8ce77112ED0a56c8C9CD0);
 
         // Deploy the StakingRewards contract
         stakingRewards = new StakingRewards(owner, address(rewardsToken));
@@ -38,17 +39,19 @@ contract StakingRewardsTest is Test {
 
         // Set up initial token distribution and approvals
         if (vm.envAddress("DEPLOYER") != address(0)) {
-            address deployer = vm.envAddress("MM");
+            address deployer = vm.envAddress("DEPLOYER");
             uint256 deployerBalance = stakingToken.balanceOf(deployer);
             console.log("Deployer balance: ", deployerBalance);
 
             // Simulate transfers from the deployer or token holder to users and the contract
-            vm.startBroadcast(pKey);
-            stakingToken.transfer(alice, 1e18 * 1000);
-            stakingToken.transfer(bob, 1e18 * 1000);
+            vm.startBroadcast(privateKey);
+            stakingToken.transfer(alice, 1e18 * 1_000_000_000);
+            stakingToken.transfer(bob, 1e18 * 1_000_000_000);
+            stakingToken.transfer(address(this), 1e18 * 20_000_000_000);
             rewardsToken.transfer(address(stakingRewards),1e18 * 5_000_000_000);
             stakingToken.approve(address(stakingRewards), type(uint256).max);
             rewardsToken.approve(address(stakingRewards), type(uint256).max);
+            
             vm.stopBroadcast();  // Stop the impersonation of the deployer
 
             // Ensure that the contract and users have approved the staking contract to handle their tokens
@@ -61,14 +64,18 @@ contract StakingRewardsTest is Test {
 
         vm.prank(bob);
         stakingToken.approve(address(stakingRewards), type(uint256).max);
+
+        vm.prank(alice);     
+        stakingRewards.transferOwnership(address(this));
+
         vm.stopPrank();
     }
 
     function testNotifyRewardAmountByOwner() public {
-        uint256 reward = 1e18 * 1_000_000_000;
-        uint256 duration = 365 days;
+        uint256 reward = 1e18 * 250_000_000_000;
+        uint256 duration = 7 days;
 
-        vm.prank(mm);
+        vm.prank(deployer);
         stakingRewards.notifyRewardAmount(reward);
         vm.stopPrank();
 
@@ -178,8 +185,10 @@ contract StakingRewardsTest is Test {
         stakingRewards.withdraw(0);
 
         // Check final balance
+        uint256 aliceInitialBalance = 1_000_000_000 * 1e18;
         uint256 aliceFinalBalance = stakingToken.balanceOf(alice);
-        assertEq(aliceFinalBalance, 1e18 * 1000, "Alice should have received all her staked tokens back");
+
+        assertEq(aliceFinalBalance, aliceInitialBalance, "Alice should have received all her staked tokens back");
     }
 
     function testWithdrawTier1ShouldFailLocked() public {
@@ -282,6 +291,116 @@ contract StakingRewardsTest is Test {
         stakingRewards.getReward(); // Alice claims her rewards
         assertGt(rewardsToken.balanceOf(alice), initialBalance, "Alice should have received some rewards");
         console.log(rewardsToken.balanceOf(alice));
+    }
+    
+    function testRecoverERC20Owner() public {
+        // First, ensure that only the owner can recover tokens
+        // Simulate sending some ERC20 tokens to the staking contract
+        uint256 amountToSend = 1e18 * 500;  // Send 500 tokens to the staking contract
+        vm.prank(alice);
+        rewardsToken.transfer(address(stakingRewards), amountToSend);
+
+        // Check balance before recovery
+        uint256 contractBalanceBefore = rewardsToken.balanceOf(address(stakingRewards));
+        uint256 ownerBalanceBefore = rewardsToken.balanceOf(owner);
+
+        // Attempt to recover tokens - this should be done by the owner
+        vm.prank(owner);
+        stakingRewards.recoverERC20(address(rewardsToken), amountToSend);
+
+        // Verify that the tokens were successfully recovered
+        uint256 contractBalanceAfter = rewardsToken.balanceOf(address(stakingRewards));
+        uint256 ownerBalanceAfter = rewardsToken.balanceOf(owner);
+
+        address owner = stakingRewards.owner();
+        console.log(owner);
+        console.log(address(this));
+
+        assertEq(owner, address(this), "Owner should be the test contract");
+        assertEq(contractBalanceBefore - amountToSend, contractBalanceAfter, "Contract should have 500 tokens less after recovery");
+        assertEq(ownerBalanceBefore + amountToSend, ownerBalanceAfter, "Owner should have 500 tokens more after recovery");
+    }
+
+    function testRecoverERC20Deployer() public {
+        // First, ensure that only the owner or deployer can recover tokens
+        // Simulate sending some ERC20 tokens to the staking contract
+        uint256 amountToSend = 1e18 * 500;  // Send 500 tokens to the staking contract
+        vm.prank(alice);
+        rewardsToken.transfer(address(stakingRewards), amountToSend);
+        vm.stopPrank();
+
+        // Check balance before recovery
+        uint256 contractBalanceBefore = rewardsToken.balanceOf(address(stakingRewards));
+        uint256 ownerBalanceBefore = rewardsToken.balanceOf(owner);
+
+        // Attempt to recover tokens - this should be done by the owner
+        vm.prank(address(this));
+        stakingRewards.recoverERC20(address(rewardsToken), amountToSend);
+
+        // Verify that the tokens were successfully recovered
+        uint256 contractBalanceAfter = rewardsToken.balanceOf(address(stakingRewards));
+        uint256 ownerBalanceAfter = rewardsToken.balanceOf(owner);
+
+        address owner = stakingRewards.owner();
+        console.log(owner);
+        console.log(address(this));
+
+        assertEq(owner, address(this), "Owner should be the test contract");
+        assertEq(contractBalanceBefore - amountToSend, contractBalanceAfter, "Contract should have 500 tokens less after recovery");
+        assertEq(ownerBalanceBefore + amountToSend, ownerBalanceAfter, "Owner should have 500 tokens more after recovery");
+    }
+
+    function testWithdrawalLimit() public {
+        // Setup
+        uint256 MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
+
+        uint256 balance = stakingToken.balanceOf(address(this));
+
+        assertEq(MAX_WITHDRAWAL_AMOUNT, balance, "Contract balance should match the max withdrawal amount");
+
+        uint256 amount = 1_000_000 * 1e18;
+
+        vm.prank(alice);
+        stakingRewards.stake(amount, 30 days);
+        vm.warp(block.timestamp + 30 days + 1); // Fast forward time to ensure withdrawal is valid
+
+        vm.prank(alice);
+        stakingRewards.getReward();  // Attempt to withdraw which should respect the max limit
+
+        // Validation
+        uint256 aliceBalance = rewardsToken.balanceOf(alice);
+        
+        assertLe(aliceBalance, MAX_WITHDRAWAL_AMOUNT, "Withdrawal should not exceed max limit");
+    }
+
+    function testSetMaxWithdrawalAmount() public {
+        uint256 newLimit = 1e18 * 500; // Set a new lower limit
+
+        // Only owner can set new withdrawal amount
+        vm.prank(owner);
+        stakingRewards.setMaxWithdrawalAmount(newLimit);
+        assertEq(stakingRewards.MAX_WITHDRAWAL_AMOUNT(), newLimit, "Max withdrawal amount should be updated");
+
+        // Ensure no other account can change it
+        vm.prank(alice);
+        vm.expectRevert("Caller is not the owner or deployer");
+        stakingRewards.setMaxWithdrawalAmount(newLimit);
+    }
+
+    function testSetDuration() public {
+        uint256 newDuration = 14 days; // Set a new duration
+
+        // Only owner can set new duration
+        vm.prank(owner);
+        stakingRewards.setDuration(newDuration);
+        assertEq(stakingRewards.DURATION(), newDuration, "Duration should be updated");
+
+        stakingToken.approve(address(stakingRewards), type(uint256).max);
+        // Ensure the duration cannot be changed after rewards distribution starts
+        stakingRewards.notifyRewardAmount(1e18); // Start reward distribution
+        vm.prank(owner);
+        vm.expectRevert("Cannot change duration after rewards distribution has started");
+        stakingRewards.setDuration(10 days);
     }
 
     // function testExit() public {
