@@ -295,26 +295,28 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         DURATION = _duration;
     }
 
-    // Temporary function to import stakes from a previous contract version
     function importStakes(
         address[] calldata stakerAddresses, 
         uint256[][] calldata stakeAmounts, 
-        uint256[][] calldata lockPeriods
+        uint256[][] calldata lockPeriodsArrays
     ) external onlyOwner {
         require(!importedStakes, "Stakes already imported");
-        require(stakerAddresses.length == stakeAmounts.length && stakerAddresses.length == lockPeriods.length, "Data length mismatch");
+        require(stakerAddresses.length == stakeAmounts.length && stakerAddresses.length == lockPeriodsArrays.length, "Data length mismatch");
 
         for (uint i = 0; i < stakerAddresses.length; i++) {
             address staker = stakerAddresses[i];
-            uint256[] memory amounts = stakeAmounts[i];
-            uint256[] memory periods = lockPeriods[i];
+            uint256[] calldata amounts = stakeAmounts[i];
+            uint256[] calldata periods = lockPeriodsArrays[i];
 
             require(amounts.length == periods.length, "Mismatched data within a single staker");
 
             for (uint j = 0; j < amounts.length; j++) {
                 uint256 amount = amounts[j];
                 uint256 period = periods[j];
-                uint256 multiplier = lockMultipliers[lockPeriods[period]];
+
+                require(lockPeriods[period] != 0, "Invalid lock period"); // Ensure valid period
+                uint256 multiplierIndex = lockPeriods[period];
+                uint256 multiplier = lockMultipliers[multiplierIndex];
 
                 stakes[staker].push(Stake(amount, period, multiplier, block.timestamp + period));
                 _totalSupply = _totalSupply.add(amount);
