@@ -73,6 +73,8 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
     mapping(uint256 => uint256) public lockMultipliers;
 
     address public deployer;
+    address[] public stakers;
+    mapping(address => bool) public isStaker;
 
     uint256 private _totalSupply;
     mapping(address => uint256) private _balances;
@@ -109,16 +111,20 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         lockMultipliers[3] = 3;  // 180 days
         lockMultipliers[6] = 6;  // 360 days
 
-        DURATION = 7 days;  // Default duration, adjustable via function
+        DURATION = 7 days; 
     }
     
     function weightedTotalSupply() public view returns (uint256) {
-        uint256 weightedSupply = 0;
-        for (uint256 i = 0; i < stakes.length; i++) {
-            weightedSupply += stakes[i].amount * lockMultipliers[lockPeriods[stakes[i].lockPeriod]];
+        uint256 totalWeightedSupply = 0;
+        for (uint256 j = 0; j < stakers.length; j++) {
+            address user = stakers[j];
+            for (uint256 i = 0; i < stakes[user].length; i++) {
+                totalWeightedSupply += stakes[user][i].amount * lockMultipliers[lockPeriods[stakes[user][i].lockPeriod]];
+            }
         }
-        return weightedSupply;
+        return totalWeightedSupply;
     }
+
 
     function totalSupply() public view override returns (uint256) {
         return _totalSupply;
@@ -160,7 +166,6 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         Stake memory stake = stakes[account][index];
         uint256 applicableRewardPerToken = rewardPerToken();
 
-        // Stop reward accrual if the stake period has ended
         if (block.timestamp > stake.lockEnd) {
             applicableRewardPerToken = min(applicableRewardPerToken, userRewardPerTokenPaid[account]);
         }
@@ -180,6 +185,11 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         _balances[msg.sender] = _balances[msg.sender].add(amount);
         lastWithdrawalTime[msg.sender] = 0;
 
+        if (!isStaker[msg.sender]) {
+            stakers.push(msg.sender);
+            isStaker[msg.sender] = true;
+        }
+
         super.stake(amount);
         emit Staked(msg.sender, amount, lockPeriod);
     }
@@ -198,6 +208,10 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
 
         stakes[msg.sender][stakeIndex] = stakes[msg.sender][stakes[msg.sender].length - 1];
         stakes[msg.sender].pop();
+
+        if (stakes[msg.sender].length == 0) {
+            removeStaker(msg.sender);
+        }        
     }
 
     function getReward() public updateReward(msg.sender) {
@@ -216,14 +230,14 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
             withdrawalAmount = MAX_WITHDRAWAL_AMOUNT;
         }
 
-        rewards[msg.sender] = rewards[msg.sender].sub(withdrawalAmount); // Reduce the reward
-        lastWithdrawalTime[msg.sender] = currentTime; // Update the last withdrawal time
+        rewards[msg.sender] = rewards[msg.sender].sub(withdrawalAmount); 
+        lastWithdrawalTime[msg.sender] = currentTime; 
         perezoso.safeTransfer(msg.sender, withdrawalAmount);
         emit RewardPaid(msg.sender, withdrawalAmount);
     }
 
-    function notifyRewardAmount(uint256 _amount) external onlyOwner updateReward(address(0)) {
-        uint256 weightedSupply = weightedTotalSupply(); // Calculate the weighted total supply
+    function notifyRewardAmount(uint256 _amount) external override onlyOwner updateReward(address(0)) {
+        uint256 weightedSupply = weightedTotalSupply();
         if (block.timestamp >= periodFinish) {
             if (weightedSupply == 0) {
                 rewardRate = 0;
@@ -245,6 +259,17 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         periodFinish = block.timestamp.add(DURATION);
         perezoso.safeTransferFrom(msg.sender, address(this), _amount);
         emit RewardAdded(_amount);
+    }
+
+    function removeStaker(address staker) private {
+        for (uint256 i = 0; i < stakers.length; i++) {
+            if (stakers[i] == staker) {
+                stakers[i] = stakers[stakers.length - 1]; 
+                stakers.pop(); 
+                isStaker[staker] = false;
+                break;
+            }
+        }
     }
 
     function recoverPerezosoToken() external onlyOwnerOrDeployer {
