@@ -111,6 +111,14 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
 
         DURATION = 7 days;  // Default duration, adjustable via function
     }
+    
+    function weightedTotalSupply() public view returns (uint256) {
+        uint256 weightedSupply = 0;
+        for (uint256 i = 0; i < stakes.length; i++) {
+            weightedSupply += stakes[i].amount * lockMultipliers[lockPeriods[stakes[i].lockPeriod]];
+        }
+        return weightedSupply;
+    }
 
     function totalSupply() public view override returns (uint256) {
         return _totalSupply;
@@ -125,7 +133,7 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
     }
 
     function rewardPerToken() public view returns (uint256) {
-        if (totalSupply() == 0) {
+        if (weightedTotalSupply() == 0) {
             return rewardPerTokenStored;
         }
         return
@@ -134,7 +142,7 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
                     .sub(lastUpdateTime)
                     .mul(rewardRate)
                     .mul(1e18)
-                    .div(totalSupply())
+                    .div(weightedTotalSupply())
             );
     }
 
@@ -214,26 +222,28 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         emit RewardPaid(msg.sender, withdrawalAmount);
     }
 
-    function notifyRewardAmount(uint256 _amount)
-        external
-        override
-        updateReward(address(0))
-    {
+    function notifyRewardAmount(uint256 _amount) external onlyOwner updateReward(address(0)) {
+        uint256 weightedSupply = weightedTotalSupply(); // Calculate the weighted total supply
         if (block.timestamp >= periodFinish) {
-            rewardRate = _amount.div(DURATION);
+            if (weightedSupply == 0) {
+                rewardRate = 0;
+            } else {
+                rewardRate = _amount.div(DURATION);
+            }
         } else {
-            uint256 remainingTime = periodFinish.sub(block.timestamp);
-            uint256 leftoverReward = remainingTime.mul(rewardRate);
-            uint256 newRewardRate = _amount.add(leftoverReward).div(DURATION);
-            require(newRewardRate >= rewardRate, "New reward rate too low");
-            rewardRate = newRewardRate;
+            uint256 remaining = periodFinish.sub(block.timestamp);
+            uint256 leftover = remaining.mul(rewardRate);
+            if (weightedSupply == 0) {
+                rewardRate = 0;
+            } else {
+                uint256 newRewardRate = _amount.add(leftover).div(DURATION);
+                require(newRewardRate >= rewardRate, "New reward rate too low");
+                rewardRate = newRewardRate;
+            }
         }
-
         lastUpdateTime = block.timestamp;
         periodFinish = block.timestamp.add(DURATION);
-
         perezoso.safeTransferFrom(msg.sender, address(this), _amount);
-
         emit RewardAdded(_amount);
     }
 
