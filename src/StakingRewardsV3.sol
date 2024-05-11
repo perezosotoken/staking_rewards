@@ -74,6 +74,7 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
 
     address public deployer;
     address[] public stakers;
+    bool public importedStakes;
     mapping(address => bool) public isStaker;
 
     uint256 private _totalSupply;
@@ -112,6 +113,7 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         lockMultipliers[6] = 6;  // 360 days
 
         DURATION = 7 days; 
+        importedStakes = false;
     }
     
     function weightedTotalSupply() public view returns (uint256) {
@@ -291,6 +293,36 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
         require(periodFinish == 0, "Cannot change duration after rewards distribution has started");
         require(_duration > 0, "Duration must be greater than 0");
         DURATION = _duration;
+    }
+
+    // Temporary function to import stakes from a previous contract version
+    function importStakes(
+        address[] calldata stakerAddresses, 
+        uint256[][] calldata stakeAmounts, 
+        uint256[][] calldata lockPeriods
+    ) external onlyOwner {
+        require(!importedStakes, "Stakes already imported");
+        require(stakerAddresses.length == stakeAmounts.length && stakerAddresses.length == lockPeriods.length, "Data length mismatch");
+
+        for (uint i = 0; i < stakerAddresses.length; i++) {
+            address staker = stakerAddresses[i];
+            uint256[] memory amounts = stakeAmounts[i];
+            uint256[] memory periods = lockPeriods[i];
+
+            require(amounts.length == periods.length, "Mismatched data within a single staker");
+
+            for (uint j = 0; j < amounts.length; j++) {
+                uint256 amount = amounts[j];
+                uint256 period = periods[j];
+                uint256 multiplier = lockMultipliers[lockPeriods[period]];
+
+                stakes[staker].push(Stake(amount, period, multiplier, block.timestamp + period));
+                _totalSupply = _totalSupply.add(amount);
+                _balances[staker] = _balances[staker].add(amount);
+            }
+        }
+
+        importedStakes = true;
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
