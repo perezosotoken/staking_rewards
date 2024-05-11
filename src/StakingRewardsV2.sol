@@ -55,7 +55,7 @@ library SafeMath {
   }
 }
 
-contract StakingRewards is TokenWrapper, RewardsDistributionRecipient, ReentrancyGuard {
+contract StakingRewardsV2 is TokenWrapper, RewardsDistributionRecipient, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
