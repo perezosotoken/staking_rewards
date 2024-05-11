@@ -310,6 +310,8 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
 
             require(amounts.length == periods.length, "Mismatched data within a single staker");
 
+            uint256 totalRewards = 0;
+
             for (uint j = 0; j < amounts.length; j++) {
                 uint256 amount = amounts[j];
                 uint256 period = periods[j];
@@ -321,10 +323,14 @@ contract StakingRewardsV3 is TokenWrapper, RewardsDistributionRecipient, Reentra
                 stakes[staker].push(Stake(amount, period, multiplier, block.timestamp + period));
                 _totalSupply = _totalSupply.add(amount);
                 _balances[staker] = _balances[staker].add(amount);
+                totalRewards += amount;
             }
         }
 
         importedStakes = true;
+
+        // Transfer balance from message sender to contract (requires approval)
+        perezoso.safeTransferFrom(msg.sender, address(this), totalRewards);
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
