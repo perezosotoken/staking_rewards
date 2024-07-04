@@ -43,11 +43,13 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
     mapping(address => uint256) public referralStaked;
     mapping(address => address) public referredBy;
     mapping(address => RewardEscrow) public escrowedRewards;
+    mapping(address => uint256) public referralRewards;
 
     address public deployer;
     bool public importedStakes;
     bool public escrowActivated;
     bool public referralsActivated;
+    bool public getRewardsActivated;
 
     struct Stake {
         uint256 amount;
@@ -288,19 +290,9 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         return referredBy[staker];
     }
     
-    function getTotalStakedByReferral(address referrer) external view returns (uint256) {
-        uint256 totalStaked = 0;
-        for (uint256 i = 0; i < stakers.length; i++) {
-            address staker = stakers[i];
-            if (referredBy[staker] == referrer) {
-                totalStaked = totalStaked.add(_balances[staker]);
-            }
-        }
-        return totalStaked;
-    }
-
     function getReward() public updateReward(msg.sender) {
         require(escrowActivated, "Escrow not activated yet");
+        require(getRewardsActivated, "Get rewards not activated yet");
 
         uint256 reward = earned(msg.sender);
         require(reward > 0, "No rewards to claim");
@@ -338,8 +330,31 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         rewardPaid[msg.sender] = rewardPaid[msg.sender].add(totalReleased);
         lastWithdrawalTime[msg.sender] = currentTime;
         amphor.safeTransfer(msg.sender, totalReleased);
+
+        // Calculate and distribute referral rewards
+        if (referralsActivated && referredBy[msg.sender] != address(0)) {
+            calculateReferralRewards(referredBy[msg.sender]);
+            uint256 referrerReward = referralRewards[referredBy[msg.sender]];
+            if (referrerReward > 0) {
+                amphor.safeTransfer(referredBy[msg.sender], referrerReward);
+                emit RewardPaid(referredBy[msg.sender], referrerReward);
+            }
+        }
+
         emit RewardPaid(msg.sender, totalReleased);
     }
+
+    function getTotalStakedByReferral(address referrer) public view returns (uint256) {
+        uint256 totalStaked = 0;
+        for (uint256 i = 0; i < stakers.length; i++) {
+            address staker = stakers[i];
+            if (referredBy[staker] == referrer) {
+                totalStaked = totalStaked.add(_balances[staker]);
+            }
+        }
+        return totalStaked;
+    }
+
 
     function recoveramphorToken() external onlyOwnerOrDeployer {
         uint256 amountToRecover = amphor.balanceOf(address(this));
@@ -379,37 +394,28 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         }
         _;
     }
-    
-    function resetStakes() external onlyOwner {
-        for (uint256 i = 0; i < stakers.length; i++) {
-            address staker = stakers[i];
-            delete stakes[staker];
-            delete userRewardPerTokenPaid[staker];
-            delete rewards[staker];
-            delete _balances[staker];
-            delete lastWithdrawalTime[staker];
-            delete isStaker[staker];
-            delete rewardPaid[staker];
-            delete escrowedRewards[staker];
+
+    function calculateReferralRewards(address referrer) internal {
+        uint256 totalStakedByReferral = getTotalStakedByReferral(referrer);
+
+        if (totalStakedByReferral < 10_000_000_000 * 1e18) {
+            referralRewards[referrer] = 100 * 1e18;
+        } else if (totalStakedByReferral < 50_000_000_000 * 1e18) {
+            referralRewards[referrer] = 500 * 1e18;
+        } else if (totalStakedByReferral < 100_000_000_000 * 1e18) {
+            referralRewards[referrer] = 1_000 * 1e18;
+        } else if (totalStakedByReferral < 300_000_000_000 * 1e18) {
+            referralRewards[referrer] = 3_000 * 1e18;
+        } else if (totalStakedByReferral < 600_000_000_000 * 1e18) {
+            referralRewards[referrer] = 6_000 * 1e18;
+        } else {
+            referralRewards[referrer] = 0;
         }
-        delete stakers;
-        _totalSupply = 0;
-        totalStakers = 0;
-        rewardPerTokenStored = 0;
-        lastUpdateTime = 0;
-        rewardRate = 0;
-        periodFinish = 0;
-        importedStakes = false;
-        escrowActivated = false;
     }
 
-    function setRewardsData(
-        address staker,
-        uint256 newRewardPerTokenStored,
-        uint256 newUserRewardPerTokenPaid
-    ) external onlyOwner {
-        rewardPerTokenStored = newRewardPerTokenStored;
-        userRewardPerTokenPaid[staker] = newUserRewardPerTokenPaid;
+    function activateGetRewards() external onlyOwner {
+        require(!getRewardsActivated, "Get rewards is already activated");
+        getRewardsActivated = true;
     }
 
     function activateEscrow() external onlyOwner {
@@ -420,85 +426,6 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
     function activateReferrals() external onlyOwner {
         require(!referralsActivated, "Referrals are already activated");
         referralsActivated = true;
-    }
-
-    function importStakes(
-        address[] calldata stakerAddresses,
-        uint256[][] calldata stakeAmounts,
-        uint256[][] calldata lockPeriodsArrays,
-        uint256[][] calldata totalEarnedPerStakeArrays,
-        uint256[] calldata totalRewardPaidPerStaker,
-        uint256 rewardPerTokenStored_,
-        uint256 lastUpdateTime_,
-        string[][] calldata stakeTimes
-    ) external onlyOwner {
-        require(
-            stakerAddresses.length == stakeAmounts.length &&
-            stakerAddresses.length == lockPeriodsArrays.length &&
-            stakerAddresses.length == totalEarnedPerStakeArrays.length &&
-            stakerAddresses.length == totalRewardPaidPerStaker.length &&
-            stakerAddresses.length == stakeTimes.length,
-            "Data length mismatch"
-        );
-
-        rewardPerTokenStored = rewardPerTokenStored_;
-        lastUpdateTime = lastUpdateTime_;
-
-        uint256 totalStaked = 0;
-
-        for (uint256 i = 0; i < stakerAddresses.length; i++) {
-            totalStaked = totalStaked.add(_importStakerStakes(
-                stakerAddresses[i],
-                stakeAmounts[i],
-                lockPeriodsArrays[i],
-                totalEarnedPerStakeArrays[i],
-                totalRewardPaidPerStaker[i],
-                rewardPerTokenStored_,
-                stakeTimes[i]
-            ));
-        }
-
-        amphor.safeTransferFrom(msg.sender, address(this), totalStaked);
-        importedStakes = true;
-    }
-
-    function _importStakerStakes(
-        address staker,
-        uint256[] calldata amounts,
-        uint256[] calldata periods,
-        uint256[] calldata earnings,
-        uint256 rewardPaidAmount,
-        uint256 rewardPerTokenStored_,
-        string[] calldata times
-    ) private returns (uint256 totalStaked) {
-        require(
-            amounts.length == periods.length &&
-            amounts.length == earnings.length &&
-            amounts.length == times.length,
-            "Mismatched data within a single staker"
-        );
-
-        rewardPaid[staker] = rewardPaidAmount;
-        userRewardPerTokenPaid[staker] = rewardPerTokenStored_;
-
-        for (uint256 j = 0; j < amounts.length; j++) {
-            require(lockPeriods[periods[j]] != 0, "Invalid lock period");
-
-            address[] memory ownersList = new address[](1);
-            ownersList[0] = staker;
-
-            uint256 multiplier = lockMultipliers[lockPeriods[periods[j]]];
-            stakes[staker].push(Stake(amounts[j], periods[j], multiplier, block.timestamp + periods[j], earnings[j], ownersList));
-            _totalSupply = _totalSupply.add(amounts[j]);
-            _balances[staker] = _balances[staker].add(amounts[j]);
-            totalStaked = totalStaked.add(amounts[j]);
-        }
-
-        if (!isStaker[staker]) {
-            stakers.push(staker);
-            isStaker[staker] = true;
-            totalStakers = totalStakers.add(1);
-        }
     }
 
     function isOwner(Stake storage stake, address owner) internal view returns (bool) {
