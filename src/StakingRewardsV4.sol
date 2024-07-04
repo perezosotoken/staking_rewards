@@ -14,9 +14,9 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
-    IERC20 public amphor;
+    IERC20 public babyPerezoso; // Reward token (BBP)
+    IERC20 public przs; // Staking token (PRZS)
     uint256 public DURATION = 7 days;
-    uint256 public MAX_WITHDRAWAL_AMOUNT = 20_000_000_000 * 1e18;
 
     uint256 public periodFinish = 0;
     uint256 public rewardRate = 0;
@@ -77,11 +77,12 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
     event TokensRecovered(address token, uint256 amount);
     event StakedByReferral(address indexed user, address indexed referrer, uint256 amount, uint256 lockPeriod);
 
-    constructor(address _owner, address _amphor)
+    constructor(address _owner, address _babyPerezoso, address _przs)
         Ownable(_owner)
-        TokenWrapper(_amphor)
+        TokenWrapper(_przs)
     {
-        amphor = IERC20(_amphor);
+        babyPerezoso = IERC20(_babyPerezoso); // Reward token (BBP)
+        przs = IERC20(_przs); // Staking token (PRZS)
         deployer = msg.sender;
 
         lockPeriods[30 days] = 1;
@@ -144,12 +145,11 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         require(index < stakes[account].length, "Stake index out of bounds");
         Stake storage stake = stakes[account][index];
 
-        uint256 applicableRewardPerToken = rewardPerToken();
-
-        if (block.timestamp > stake.lockEnd) {
-            applicableRewardPerToken = min(applicableRewardPerToken, userRewardPerTokenPaid[account]);
+        if (block.timestamp <= stake.lockEnd) {
+            return 0; // Earn 0 rewards if still within the lock period
         }
 
+        uint256 applicableRewardPerToken = rewardPerToken();
         uint256 rewardDelta = applicableRewardPerToken.sub(userRewardPerTokenPaid[account]);
 
         uint256 newEarnedAmount = stake.amount.mul(rewardDelta).div(1e18).mul(stake.multiplier);
@@ -185,7 +185,7 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
             totalStakers = totalStakers.add(1);
         }
 
-        super.stake(amount);
+        przs.safeTransferFrom(msg.sender, address(this), amount); // Transfer staking tokens
         emit Staked(msg.sender, amount, lockPeriod);
     }
 
@@ -222,7 +222,7 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
             totalStakers = totalStakers.add(1);
         }
 
-        super.stake(amount);
+        przs.safeTransferFrom(msg.sender, address(this), amount); // Transfer staking tokens
         emit StakedByReferral(msg.sender, referrer, amount, lockPeriod);
     }
 
@@ -237,7 +237,7 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
 
         _totalSupply = _totalSupply.sub(stake.amount);
         _balances[msg.sender] = _balances[msg.sender].sub(stake.amount);
-        super.withdraw(stake.amount);
+        przs.safeTransfer(msg.sender, stake.amount); // Transfer staking tokens back
         emit Withdrawn(msg.sender, stake.amount);
 
         stakes[msg.sender][stakeIndex] = stakes[msg.sender][stakes[msg.sender].length - 1];
@@ -263,8 +263,7 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         lastUpdateTime = block.timestamp;
         periodFinish = block.timestamp.add(DURATION);
 
-        amphor.safeTransferFrom(msg.sender, address(this), _amount);
-
+        babyPerezoso.safeTransferFrom(msg.sender, address(this), _amount); // Transfer reward tokens
         emit RewardAdded(_amount);
     }
 
@@ -329,14 +328,14 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         rewards[msg.sender] = rewards[msg.sender].sub(totalReleased);
         rewardPaid[msg.sender] = rewardPaid[msg.sender].add(totalReleased);
         lastWithdrawalTime[msg.sender] = currentTime;
-        amphor.safeTransfer(msg.sender, totalReleased);
+        babyPerezoso.safeTransfer(msg.sender, totalReleased); // Transfer reward tokens
 
         // Calculate and distribute referral rewards
         if (referralsActivated && referredBy[msg.sender] != address(0)) {
             calculateReferralRewards(referredBy[msg.sender]);
             uint256 referrerReward = referralRewards[referredBy[msg.sender]];
             if (referrerReward > 0) {
-                amphor.safeTransfer(referredBy[msg.sender], referrerReward);
+                babyPerezoso.safeTransfer(referredBy[msg.sender], referrerReward);
                 emit RewardPaid(referredBy[msg.sender], referrerReward);
             }
         }
@@ -355,20 +354,15 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         return totalStaked;
     }
 
-
-    function recoveramphorToken() external onlyOwnerOrDeployer {
-        uint256 amountToRecover = amphor.balanceOf(address(this));
-        amphor.safeTransfer(owner(), amountToRecover);
-        emit TokensRecovered(address(amphor), amountToRecover);
+    function recoverBabyPerezosoToken() external onlyOwnerOrDeployer {
+        uint256 amountToRecover = babyPerezoso.balanceOf(address(this));
+        babyPerezoso.safeTransfer(owner(), amountToRecover);
+        emit TokensRecovered(address(babyPerezoso), amountToRecover);
     }
 
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external onlyOwnerOrDeployer {
         IERC20(tokenAddress).safeTransfer(owner(), tokenAmount);
         emit TokensRecovered(tokenAddress, tokenAmount);
-    }
-
-    function setMaxWithdrawalAmount(uint256 amount) external onlyOwnerOrDeployer {
-        MAX_WITHDRAWAL_AMOUNT = amount;
     }
 
     function setDuration(uint256 _duration) external onlyOwnerOrDeployer {
