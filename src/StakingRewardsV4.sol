@@ -8,12 +8,14 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 import "./RewardsDistributionRecipient.sol";
 import "./TokenWrapper.sol";
+import "./RewardEscrow.sol";
 import "./SafeMath.sol";
 
 contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
+    RewardEscrow public rewardEscrow;
     IERC20 public babyPerezoso; // Reward token (BBP)
     IERC20 public przs; // Staking token (PRZS)
     uint256 public DURATION = 7 days;
@@ -39,13 +41,19 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
     mapping(address => bool) public isStaker;
     mapping(address => uint256) public rewardPaid;
 
-    mapping(address => uint256) public referralCount;
-    mapping(address => uint256) public referralStaked;
-    mapping(address => address) public referredBy;
-    mapping(address => RewardEscrow) public escrowedRewards;
+    mapping(address => uint256) public totalReferralStaked;
     mapping(address => uint256) public referralRewards;
+    mapping(address => uint256) public totalStakedByReferral;
+    mapping(address => mapping(address => uint256)) public referralStakes; // referrer -> staker -> amount
+    mapping(address => bool) public referralRewardClaimed; // Track if referral reward has been claimed
+
+    mapping(address => address) public referredBy; // Maps staker to referrer
+    mapping(address => uint256) public referralCount; // Count of referrals by referrer
+    mapping(address => uint256) public referralStaked; // Total staked by referrals
 
     address public deployer;
+    address public rewardEscrowAddress;
+
     bool public importedStakes;
     bool public escrowActivated;
     bool public referralsActivated;
@@ -60,7 +68,7 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         address[] owners;
     }
 
-    struct RewardEscrow {
+    struct RewardEntry {
         uint256 totalEscrowed;
         uint256 releaseTime1;
         uint256 releaseTime2;
@@ -92,8 +100,8 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
 
         lockMultipliers[1] = 1;
         lockMultipliers[2] = 2;
-        lockMultipliers[3] = 3;
-        lockMultipliers[6] = 6;
+        lockMultipliers[3] = 1;
+        lockMultipliers[6] = 2;
     }
 
     function totalSupply() public view override returns (uint256) {
@@ -145,16 +153,18 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         require(index < stakes[account].length, "Stake index out of bounds");
         Stake storage stake = stakes[account][index];
 
-        if (block.timestamp <= stake.lockEnd) {
-            return 0; // Earn 0 rewards if still within the lock period
-        }
-
         uint256 applicableRewardPerToken = rewardPerToken();
         uint256 rewardDelta = applicableRewardPerToken.sub(userRewardPerTokenPaid[account]);
 
         uint256 newEarnedAmount = stake.amount.mul(rewardDelta).div(1e18).mul(stake.multiplier);
 
-        return stake.totalEarned.add(newEarnedAmount);
+        if (block.timestamp <= stake.lockEnd) {
+            return stake.totalEarned.add(newEarnedAmount);
+        } else {
+            // Calculate rewards until lock end
+            uint256 rewardUntilLockEnd = stake.amount.mul(stake.lockEnd.sub(lastUpdateTime)).mul(rewardRate).div(weightedTotalSupply()).div(1e18).mul(stake.multiplier);
+            return stake.totalEarned.add(rewardUntilLockEnd);
+        }
     }
 
     function stakesCount(address user) public view returns (uint256) {
@@ -167,7 +177,7 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
 
     function stake(uint256 amount, uint256 lockPeriod) public updateReward(msg.sender) {
         require(amount > 0, "Cannot stake 0");
-        require(lockPeriods[lockPeriod] > 0, "Invalid lock period");
+        require(lockPeriods[lockPeriod] >= 3, "Invalid lock period");
 
         address[] memory ownersList = new address[](1);
         ownersList[0] = msg.sender;
@@ -192,20 +202,19 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
     function stakeByRef(uint256 amount, uint256 lockPeriod, address referrer) public updateReward(msg.sender) {
         require(referralsActivated, "Referrals not activated yet");
         require(amount > 0, "Cannot stake 0");
-        require(lockPeriods[lockPeriod] > 0, "Invalid lock period");
+        require(lockPeriods[lockPeriod] >= 3, "Invalid lock period");
 
-        // Ensure the referrer is not the same as the staker and is a valid address
         require(referrer != msg.sender, "Referrer cannot be the staker");
         require(referrer != address(0), "Invalid referrer address");
 
-        // Track referral data
         if (referredBy[msg.sender] == address(0)) {
             referredBy[msg.sender] = referrer;
             referralCount[referrer] = referralCount[referrer].add(1);
         }
         referralStaked[referrer] = referralStaked[referrer].add(amount);
+        totalStakedByReferral[referrer] = totalStakedByReferral[referrer].add(amount);
+        referralStakes[referrer][msg.sender] = referralStakes[referrer][msg.sender].add(amount);
 
-        // Proceed with staking
         address[] memory ownersList = new address[](1);
         ownersList[0] = msg.sender;
 
@@ -222,7 +231,7 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
             totalStakers = totalStakers.add(1);
         }
 
-        przs.safeTransferFrom(msg.sender, address(this), amount); // Transfer staking tokens
+        przs.safeTransferFrom(msg.sender, address(this), amount);
         emit StakedByReferral(msg.sender, referrer, amount, lockPeriod);
     }
 
@@ -245,9 +254,37 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         totalStakers = totalStakers.sub(1);
     }
 
+    function delegateWithdraw(uint256 stakeIndex, address staker) public updateReward(staker) {
+        require(stakeIndex < stakes[staker].length, "Invalid stake index");
+        Stake storage stake = stakes[staker][stakeIndex];
+
+        require(stake.amount > 0, "No stake to withdraw");
+        require(block.timestamp >= stake.lockEnd, "Stake is locked");
+
+        bool isDelegatee = false;
+        for (uint256 i = 0; i < stake.owners.length; i++) {
+            if (stake.owners[i] == msg.sender) {
+                isDelegatee = true;
+                break;
+            }
+        }
+        require(isDelegatee, "Caller is not authorized to withdraw");
+
+        _totalSupply = _totalSupply.sub(stake.amount);
+        _balances[staker] = _balances[staker].sub(stake.amount);
+        przs.safeTransfer(staker, stake.amount); // Transfer staking tokens back to staker
+        emit Withdrawn(staker, stake.amount);
+
+        stakes[staker][stakeIndex] = stakes[staker][stakes[staker].length - 1];
+        stakes[staker].pop();
+        totalStakers = totalStakers.sub(1);
+    }
+
+
     function notifyRewardAmount(uint256 _amount)
         external
         override
+        onlyRewardsDistribution
         updateReward(address(0))
     {
         if (block.timestamp >= periodFinish) {
@@ -288,59 +325,41 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
     function getReferrer(address staker) external view returns (address) {
         return referredBy[staker];
     }
-    
+        
     function getReward() public updateReward(msg.sender) {
-        require(escrowActivated, "Escrow not activated yet");
         require(getRewardsActivated, "Get rewards not activated yet");
 
         uint256 reward = earned(msg.sender);
         require(reward > 0, "No rewards to claim");
 
-        RewardEscrow storage escrow = escrowedRewards[msg.sender];
+        uint256 totalReleased = reward;
         uint256 currentTime = block.timestamp;
-        uint256 totalReleased = 0;
 
-        if (escrow.releaseTime1 == 0) {
-            escrow.totalEscrowed = reward;
-            escrow.releaseTime1 = currentTime + 30 days;
-            escrow.releaseTime2 = currentTime + 60 days;
-            escrow.releaseTime3 = currentTime + 90 days;
-            escrow.withdrawn1 = false;
-            escrow.withdrawn2 = false;
-            escrow.withdrawn3 = false;
-        }
+        if (escrowActivated) {
+            uint256[] memory amounts = new uint256[](3);
+            uint256[] memory releaseTimes = new uint256[](3);
 
-        if (currentTime >= escrow.releaseTime1 && !escrow.withdrawn1) {
-            totalReleased = totalReleased.add(escrow.totalEscrowed.div(3));
-            escrow.withdrawn1 = true;
-        }
-        if (currentTime >= escrow.releaseTime2 && !escrow.withdrawn2) {
-            totalReleased = totalReleased.add(escrow.totalEscrowed.div(3));
-            escrow.withdrawn2 = true;
-        }
-        if (currentTime >= escrow.releaseTime3 && !escrow.withdrawn3) {
-            totalReleased = totalReleased.add(escrow.totalEscrowed.sub(escrow.totalEscrowed.div(3).mul(2))); // remaining amount
-            escrow.withdrawn3 = true;
-        }
+            amounts[0] = reward.div(3);
+            amounts[1] = reward.div(3);
+            amounts[2] = reward.sub(amounts[0]).sub(amounts[1]);
 
-        require(totalReleased > 0, "No rewards to release yet");
+            releaseTimes[0] = currentTime + 30 days;
+            releaseTimes[1] = currentTime + 60 days;
+            releaseTimes[2] = currentTime + 90 days;
+
+            rewardEscrow.createEscrows(msg.sender, amounts, releaseTimes);
+            babyPerezoso.safeTransfer(address(rewardEscrow), reward);
+            totalReleased = 0;
+        }
 
         rewards[msg.sender] = rewards[msg.sender].sub(totalReleased);
         rewardPaid[msg.sender] = rewardPaid[msg.sender].add(totalReleased);
         lastWithdrawalTime[msg.sender] = currentTime;
-        babyPerezoso.safeTransfer(msg.sender, totalReleased); // Transfer reward tokens
 
-        // Calculate and distribute referral rewards
-        if (referralsActivated && referredBy[msg.sender] != address(0)) {
-            calculateReferralRewards(referredBy[msg.sender]);
-            uint256 referrerReward = referralRewards[referredBy[msg.sender]];
-            if (referrerReward > 0) {
-                babyPerezoso.safeTransfer(referredBy[msg.sender], referrerReward);
-                emit RewardPaid(referredBy[msg.sender], referrerReward);
-            }
+        if (totalReleased > 0) {
+            babyPerezoso.safeTransfer(msg.sender, totalReleased);
+            emit RewardPaid(msg.sender, totalReleased);
         }
-
-        emit RewardPaid(msg.sender, totalReleased);
     }
 
     function getTotalStakedByReferral(address referrer) public view returns (uint256) {
@@ -358,6 +377,12 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         uint256 amountToRecover = babyPerezoso.balanceOf(address(this));
         babyPerezoso.safeTransfer(owner(), amountToRecover);
         emit TokensRecovered(address(babyPerezoso), amountToRecover);
+    }
+
+    function recoverPerezosoToken() external onlyOwnerOrDeployer {
+        uint256 amountToRecover = przs.balanceOf(address(this));
+        przs.safeTransfer(owner(), amountToRecover);
+        emit TokensRecovered(address(przs), amountToRecover);
     }
 
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external onlyOwnerOrDeployer {
@@ -380,8 +405,11 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         lastUpdateTime = lastTimeRewardApplicable();
         if (account != address(0)) {
             for (uint256 i = 0; i < stakes[account].length; i++) {
+                Stake storage stake = stakes[account][i];
                 uint256 earnedAmount = earnedOnStake(account, i);
-                stakes[account][i].totalEarned = earnedAmount;
+                if (block.timestamp <= stake.lockEnd) {
+                    stakes[account][i].totalEarned = earnedAmount;
+                }
             }
             rewards[account] = earned(account);
             userRewardPerTokenPaid[account] = rewardPerTokenStored;
@@ -389,8 +417,8 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         _;
     }
 
-    function calculateReferralRewards(address referrer) internal {
-        uint256 totalStakedByReferral = getTotalStakedByReferral(referrer);
+    function calculateReferralRewards(address referrer) public {
+        uint256 totalStakedByReferral = totalStakedByReferral[referrer];
 
         if (totalStakedByReferral < 10_000_000_000 * 1e18) {
             referralRewards[referrer] = 100 * 1e18;
@@ -407,6 +435,20 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         }
     }
 
+    function claimReferralRewards() public {
+        require(referralsActivated, "Referrals not activated yet");
+        require(!referralRewardClaimed[msg.sender], "Referral reward already claimed");
+
+        calculateReferralRewards(msg.sender);
+        uint256 reward = referralRewards[msg.sender];
+        require(reward > 0, "No referral rewards to claim");
+
+        referralRewardClaimed[msg.sender] = true;
+        babyPerezoso.safeTransfer(msg.sender, reward);
+        emit RewardPaid(msg.sender, reward);
+    }
+
+
     function activateGetRewards() external onlyOwner {
         require(!getRewardsActivated, "Get rewards is already activated");
         getRewardsActivated = true;
@@ -417,9 +459,14 @@ contract StakingRewardsV4 is TokenWrapper, RewardsDistributionRecipient, Reentra
         escrowActivated = true;
     }
 
-    function activateReferrals() external onlyOwner {
-        require(!referralsActivated, "Referrals are already activated");
-        referralsActivated = true;
+    function setReferrals(bool flag) external onlyOwner {
+        referralsActivated = flag;
+    }
+
+    function setRewardEscrow(address _rewardEscrow) external onlyOwner {
+        require(rewardEscrowAddress == address(0), "Reward escrow already set");
+        rewardEscrowAddress = _rewardEscrow;
+        rewardEscrow = RewardEscrow(_rewardEscrow);
     }
 
     function isOwner(Stake storage stake, address owner) internal view returns (bool) {
